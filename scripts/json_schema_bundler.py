@@ -186,7 +186,7 @@ def decompose(in_args: Input, schema_relative_paths_and_contents: list[tuple[Pat
 
 
 def get_object_at_json_path(json: dict[str, Any], path: str) -> dict[str, Any]:
-    segments = [s for s in re.split('[.\[\]]', path) if s]
+    segments = [s for s in re.split(r'[.\\[\]]', path) if s]
     assert segments[0] == '$'
 
     node = json
@@ -214,16 +214,40 @@ def escape_json_ref_path(path: str) -> str:
     return re.sub('/', '__', path)
 
 
+def de_escape_json_ref_path(path: str) -> str:
+    return re.sub('__', '/', path)
+
+
 def make_json_path_from(path: str) -> str:
     return f"$.{'.'.join(path.split('/'))}"
+
+
+def instantiate_defs_originating_from_schema(in_args: Input, bundled: dict[str, Any], key_of_this_schema: str, subschemas: list[tuple[str, dict[str, Any]]], origins: dict[str, str], decomposed_schemas: dict[str, dict[str, Any]]) -> None:
+    for def_originating_from_here in [d for d, v in origins.items() if v == key_of_this_schema]:
+        assert def_originating_from_here in decomposed_schemas
+        if '$defs' not in bundled:
+            bundled['$defs'] = {}
+
+        copied_subschema = deepcopy(decomposed_schemas[def_originating_from_here])
+        if 'version' in copied_subschema:
+            del copied_subschema['version']
+
+        bundled['$defs'][def_originating_from_here] = copied_subschema
+        subschemas.append((def_originating_from_here, copied_subschema))
+
+        if in_args.verbose:
+            print(f"---- Re-inserted '$def' for '{def_originating_from_here}'")
 
 
 def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_schema: str, this_schema: dict[str, Any],
                        content_root: str,
                        reference_paths: list[tuple[str, str]], decomposed_schemas: dict[str, dict[str, Any]]):
     for ref_path, key_of_referencing_object in reference_paths:
-        if key_of_referencing_object == key_of_this_schema:
+        if key_of_referencing_object == de_escape_json_ref_path(key_of_this_schema):
             referencing_object = get_object_at_json_path(this_schema, ref_path)
+            if referencing_object['$ref'].startswith('#'):
+                continue
+
             key_of_referenced_object = get_decomposed_key_at_content(content_root, referencing_object['$ref'])
 
             key_parts = key_of_referenced_object.split('#')
@@ -283,22 +307,19 @@ def bundle_single(in_args: Input, decomposed_key: str, content_root: str,
 
     subschemas: list[tuple[str, dict[str, Any]]] = []
 
-    for def_originating_from_here in [d for d, v in origins.items() if v == decomposed_key]:
-        assert def_originating_from_here in decomposed_schemas
-        if '$defs' not in bundled:
-            bundled['$defs'] = {}
-
-        copied_subschema = deepcopy(decomposed_schemas[def_originating_from_here])
-        if 'version' in copied_subschema:
-            del copied_subschema['version']
-
-        bundled['$defs'][def_originating_from_here] = copied_subschema
-        subschemas.append((def_originating_from_here, copied_subschema))
-
-        if in_args.verbose:
-            print(f"---- Re-inserted '$def' for '{def_originating_from_here}'")
-
+    instantiate_defs_originating_from_schema(in_args, bundled, decomposed_key, subschemas, origins, decomposed_schemas)
     replace_references(in_args, bundled, decomposed_key, bundled, content_root, reference_paths, decomposed_schemas)
+    for subschema_key, subschema_contents in subschemas:
+        replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths,
+                           decomposed_schemas)
+
+    if '$defs' in bundled:
+        old_keys = [k for k in bundled['$defs']]
+        for k in old_keys:
+            de_escaped_key = de_escape_json_ref_path(k)
+            instantiate_defs_originating_from_schema(in_args, bundled, de_escaped_key, subschemas, origins, decomposed_schemas)
+            replace_references(in_args, bundled, k, bundled['$defs'][k], content_root, reference_paths, decomposed_schemas)
+
     for subschema_key, subschema_contents in subschemas:
         replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths,
                            decomposed_schemas)
