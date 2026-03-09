@@ -119,7 +119,8 @@ def extract_references_single(in_args: Input, current_node: Any, root_id: str, r
         for k, v in current_node.items():
             if k == '$ref':
                 if v.startswith('#'):
-                    print(f"---- Skipping reference to subschema in current object '{root_id}' at '{current_path}'")
+                    if in_args.verbose:
+                        print(f"---- Skipping reference to subschema in current object '{root_id}' at '{current_path}'")
                     continue
 
                 reference_paths.append((current_path, root_id))
@@ -144,7 +145,8 @@ def extract_references(in_args: Input, contents_list: list[tuple[str, dict[str, 
 
 
 def filter_meta_properties(contents: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in contents.items() if not k.startswith('$') or k.startswith('$comment') or k.startswith('$ref')}
+    return {k: v for k, v in contents.items() if
+            not k.startswith('$') or k.startswith('$comment') or k.startswith('$ref')}
 
 
 def decompose_single(in_args: Input, this_relative_path: str, this_contents: dict[str, Any],
@@ -222,7 +224,9 @@ def make_json_path_from(path: str) -> str:
     return f"$.{'.'.join(path.split('/'))}"
 
 
-def instantiate_defs_originating_from_schema(in_args: Input, bundled: dict[str, Any], key_of_this_schema: str, subschemas: list[tuple[str, dict[str, Any]]], origins: dict[str, str], decomposed_schemas: dict[str, dict[str, Any]]) -> None:
+def instantiate_defs_originating_from_schema(in_args: Input, bundled: dict[str, Any], key_of_this_schema: str,
+                                             subschemas: list[tuple[str, dict[str, Any]]], origins: dict[str, str],
+                                             decomposed_schemas: dict[str, dict[str, Any]]) -> None:
     for def_originating_from_here in [d for d, v in origins.items() if v == key_of_this_schema]:
         assert def_originating_from_here in decomposed_schemas
         if '$defs' not in bundled:
@@ -281,7 +285,8 @@ def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_sche
                 remaining_segments = path_in_referenced_object.split('/', maxsplit=1)
 
                 referenced_object = get_object_at_json_path(decomposed_schemas[remaining_segments[0]],
-                                                            make_json_path_from(remaining_segments[1] if len(remaining_segments) > 1 else ''))
+                                                            make_json_path_from(remaining_segments[1] if len(
+                                                                remaining_segments) > 1 else ''))
 
             copied_subobject = deepcopy(referenced_object)
             if 'version' in copied_subobject:
@@ -319,8 +324,10 @@ def bundle_single(in_args: Input, decomposed_key: str, content_root: str,
             old_keys = [k for k in bundled['$defs']]
             for k in old_keys:
                 de_escaped_key = de_escape_json_ref_path(k)
-                instantiate_defs_originating_from_schema(in_args, bundled, de_escaped_key, subschemas, origins, decomposed_schemas)
-                replace_references(in_args, bundled, k, bundled['$defs'][k], content_root, reference_paths, decomposed_schemas)
+                instantiate_defs_originating_from_schema(in_args, bundled, de_escaped_key, subschemas, origins,
+                                                         decomposed_schemas)
+                replace_references(in_args, bundled, k, bundled['$defs'][k], content_root, reference_paths,
+                                   decomposed_schemas)
 
         for subschema_key, subschema_contents in subschemas:
             replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths,
