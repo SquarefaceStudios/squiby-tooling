@@ -144,7 +144,7 @@ def extract_references(in_args: Input, contents_list: list[tuple[str, dict[str, 
 
 
 def filter_meta_properties(contents: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in contents.items() if not k.startswith('$') or k.startswith('$comment')}
+    return {k: v for k, v in contents.items() if not k.startswith('$') or k.startswith('$comment') or k.startswith('$ref')}
 
 
 def decompose_single(in_args: Input, this_relative_path: str, this_contents: dict[str, Any],
@@ -214,12 +214,22 @@ def escape_json_ref_path(path: str) -> str:
     return re.sub('/', '__', path)
 
 
-def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_schema: str, this_schema: dict[str, Any], content_root: str,
+def make_json_path_from(path: str) -> str:
+    return f"$.{'.'.join(path.split('/'))}"
+
+
+def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_schema: str, this_schema: dict[str, Any],
+                       content_root: str,
                        reference_paths: list[tuple[str, str]], decomposed_schemas: dict[str, dict[str, Any]]):
     for ref_path, key_of_referencing_object in reference_paths:
         if key_of_referencing_object == key_of_this_schema:
             referencing_object = get_object_at_json_path(this_schema, ref_path)
             key_of_referenced_object = get_decomposed_key_at_content(content_root, referencing_object['$ref'])
+
+            key_parts = key_of_referenced_object.split('#')
+            assert len(key_parts) > 0
+            key_of_referenced_object = key_parts[0]
+            path_in_referenced_object = key_parts[1] if len(key_parts) > 1 else ''
 
             if key_of_referenced_object not in decomposed_schemas:
                 raise ValueError(
@@ -228,22 +238,35 @@ def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_sche
             if '$defs' not in bundled:
                 bundled['$defs'] = {}
 
-            referencing_object['$ref'] = f'#/$defs/{escape_json_ref_path(key_of_referenced_object)}'
+            if not path_in_referenced_object:
+                referencing_object['$ref'] = f'#/$defs/{escape_json_ref_path(key_of_referenced_object)}'
+            else:
+                referencing_object['$ref'] = f'#/$defs/{escape_json_ref_path(path_in_referenced_object.split('/')[-1])}'
 
             if in_args.verbose:
                 print(f"---- Replacing reference to '{key_of_referenced_object}' at '{ref_path}'")
 
-            if key_of_referenced_object in bundled['$defs']:
+            if key_of_referenced_object in bundled['$defs'] and not path_in_referenced_object:
                 if in_args.verbose:
                     print(f"-- Skipping duplicate of definition for '{key_of_referenced_object}'")
                 continue
 
-            copied_subobject = deepcopy(
-                decomposed_schemas[key_of_referenced_object])
+            referenced_object = decomposed_schemas[key_of_referenced_object]
+            if path_in_referenced_object and path_in_referenced_object.startswith('/$defs/'):
+                path_in_referenced_object = path_in_referenced_object.removeprefix('/$defs/')
+                remaining_segments = path_in_referenced_object.split('/', maxsplit=1)
+
+                referenced_object = get_object_at_json_path(decomposed_schemas[remaining_segments[0]],
+                                                            make_json_path_from(remaining_segments[1] if len(remaining_segments) > 1 else ''))
+
+            copied_subobject = deepcopy(referenced_object)
             if 'version' in copied_subobject:
                 del copied_subobject['version']
 
-            bundled['$defs'][escape_json_ref_path(key_of_referenced_object)] = copied_subobject
+            if not path_in_referenced_object:
+                bundled['$defs'][escape_json_ref_path(key_of_referenced_object)] = copied_subobject
+            else:
+                bundled['$defs'][escape_json_ref_path(path_in_referenced_object.split('/')[-1])] = copied_subobject
 
             if in_args.verbose:
                 print(f"---- Inserted '$def' for '{key_of_referenced_object}'")
@@ -277,7 +300,8 @@ def bundle_single(in_args: Input, decomposed_key: str, content_root: str,
 
     replace_references(in_args, bundled, decomposed_key, bundled, content_root, reference_paths, decomposed_schemas)
     for subschema_key, subschema_contents in subschemas:
-        replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths, decomposed_schemas)
+        replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths,
+                           decomposed_schemas)
 
     output[decomposed_key] = bundled
     pass
