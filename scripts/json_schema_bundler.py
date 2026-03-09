@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,10 @@ def extract_references_single(in_args: Input, current_node: Any, root_id: str, r
     if isinstance(current_node, dict):
         for k, v in current_node.items():
             if k == '$ref':
+                if v.startswith('#'):
+                    print(f"---- Skipping reference to subschema in current object '{root_id}' at '{current_path}'")
+                    continue
+
                 reference_paths.append((current_path, root_id))
                 if in_args.verbose:
                     print(f"---- Identified reference in decomposed object '{root_id}' at '{current_path}'")
@@ -139,7 +144,7 @@ def extract_references(in_args: Input, contents_list: list[tuple[str, dict[str, 
 
 
 def filter_meta_properties(contents: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in contents.items() if not k.startswith('$')}
+    return {k: v for k, v in contents.items() if not k.startswith('$') or k.startswith('$comment')}
 
 
 def decompose_single(in_args: Input, this_relative_path: str, this_contents: dict[str, Any],
@@ -181,16 +186,21 @@ def decompose(in_args: Input, schema_relative_paths_and_contents: list[tuple[Pat
 
 
 def get_object_at_json_path(json: dict[str, Any], path: str) -> dict[str, Any]:
-    segments = path.split('.')
+    segments = [s for s in re.split('[.\[\]]', path) if s]
     assert segments[0] == '$'
 
     node = json
     for segment in segments[1:]:
-        if not isinstance(node, dict):
-            raise ValueError(f"Path '{path}' in json did not refer to a valid object.")
+        if not isinstance(node, dict) and not isinstance(node, list):
+            raise ValueError(f"Path '{path}' in json did not refer to a valid indexable object.")
 
-        node = node[segment]
+        if isinstance(node, dict):
+            node = node[segment]
+        else:
+            node = node[int(segment)]
 
+    if not isinstance(node, dict):
+        raise ValueError(f"Path '{path}' in json does not refer to a referenceable object")
     return node
 
 
@@ -198,6 +208,45 @@ def get_decomposed_key_at_content(root: str, complete: str) -> str:
     if not complete.startswith(root):
         raise ValueError(f'Reference {complete} does not map to content root {root}')
     return complete.removeprefix(root)
+
+
+def escape_json_ref_path(path: str) -> str:
+    return re.sub('/', '__', path)
+
+
+def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_schema: str, this_schema: dict[str, Any], content_root: str,
+                       reference_paths: list[tuple[str, str]], decomposed_schemas: dict[str, dict[str, Any]]):
+    for ref_path, key_of_referencing_object in reference_paths:
+        if key_of_referencing_object == key_of_this_schema:
+            referencing_object = get_object_at_json_path(this_schema, ref_path)
+            key_of_referenced_object = get_decomposed_key_at_content(content_root, referencing_object['$ref'])
+
+            if key_of_referenced_object not in decomposed_schemas:
+                raise ValueError(
+                    f"Undefined reference to '{key_of_referenced_object}' in '{key_of_this_schema}' at '{ref_path}'")
+
+            if '$defs' not in bundled:
+                bundled['$defs'] = {}
+
+            referencing_object['$ref'] = f'#/$defs/{escape_json_ref_path(key_of_referenced_object)}'
+
+            if in_args.verbose:
+                print(f"---- Replacing reference to '{key_of_referenced_object}' at '{ref_path}'")
+
+            if key_of_referenced_object in bundled['$defs']:
+                if in_args.verbose:
+                    print(f"-- Skipping duplicate of definition for '{key_of_referenced_object}'")
+                continue
+
+            copied_subobject = deepcopy(
+                decomposed_schemas[key_of_referenced_object])
+            if 'version' in copied_subobject:
+                del copied_subobject['version']
+
+            bundled['$defs'][escape_json_ref_path(key_of_referenced_object)] = copied_subobject
+
+            if in_args.verbose:
+                print(f"---- Inserted '$def' for '{key_of_referenced_object}'")
 
 
 def bundle_single(in_args: Input, decomposed_key: str, content_root: str,
@@ -217,44 +266,26 @@ def bundle_single(in_args: Input, decomposed_key: str, content_root: str,
             bundled['$defs'] = {}
 
         copied_subschema = deepcopy(decomposed_schemas[def_originating_from_here])
+        if 'version' in copied_subschema:
+            del copied_subschema['version']
+
         bundled['$defs'][def_originating_from_here] = copied_subschema
         subschemas.append((def_originating_from_here, copied_subschema))
 
         if in_args.verbose:
             print(f"---- Re-inserted '$def' for '{def_originating_from_here}'")
 
-    for ref_path, key_of_referencing_object in reference_paths:
-        if key_of_referencing_object == decomposed_key:
-            referencing_object = get_object_at_json_path(bundled, ref_path)
-            key_of_referenced_object = get_decomposed_key_at_content(content_root, referencing_object['$ref'])
-
-            if key_of_referenced_object not in decomposed_schemas:
-                raise ValueError(f"Undefined reference to '{key_of_referenced_object}' in '{decomposed_key}' at '{ref_path}'")
-
-            if '$defs' not in bundled:
-                bundled['$defs'] = {}
-
-            referencing_object['$ref'] = f'#/$defs/{key_of_referenced_object}'
-
-            if in_args.verbose:
-                print(f"---- Replacing reference to '{key_of_referenced_object}' at '{ref_path}'")
-
-            if key_of_referenced_object in bundled['$defs']:
-                if in_args.verbose:
-                    print(f"-- Skipping duplicate of definition for '{key_of_referenced_object}'")
-                continue
-
-            bundled['$defs'][key_of_referenced_object] = deepcopy(decomposed_schemas[key_of_referenced_object])
-
-            if in_args.verbose:
-                print(f"---- Inserted '$def' for '{key_of_referenced_object}'")
+    replace_references(in_args, bundled, decomposed_key, bundled, content_root, reference_paths, decomposed_schemas)
+    for subschema_key, subschema_contents in subschemas:
+        replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths, decomposed_schemas)
 
     output[decomposed_key] = bundled
     pass
 
 
 def bundle(in_args: Input, paths_of_schemas_to_bundle: list[Path], content_root: str,
-           reference_paths: list[tuple[str, str]], decomposed_schemas: dict[str, dict[str, Any]], origins: dict[str, str]) -> dict[
+           reference_paths: list[tuple[str, str]], decomposed_schemas: dict[str, dict[str, Any]],
+           origins: dict[str, str]) -> dict[
     str, dict[str, Any]]:
     bundled_schemas_by_paths = {}
     for path_to_schema_to_bundle in paths_of_schemas_to_bundle:
@@ -286,6 +317,7 @@ def write_bundled_schemas(in_args: Input, bundled_schemas: dict[str, dict[str, A
     for rel_path, schema in bundled_schemas.items():
         path_to_write_to = in_args.out_dir / rel_path
         write_single_bundled_schema(in_args, path_to_write_to, schema)
+
 
 def main(arguments: list[str]) -> None:
     from argparse import ArgumentParser
@@ -334,7 +366,8 @@ def main(arguments: list[str]) -> None:
 
     if in_args.verbose:
         print('\nBundling output schemas:')
-    rebundled_schemas = bundle(in_args, paths_of_schemas_to_bundle, content_root, reference_paths, decomposed_schemas, origins)
+    rebundled_schemas = bundle(in_args, paths_of_schemas_to_bundle, content_root, reference_paths, decomposed_schemas,
+                               origins)
 
     if in_args.verbose:
         print(f"\nWriting bundled schemas at '{in_args.out_dir}'")
