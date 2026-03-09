@@ -313,16 +313,19 @@ def bundle_single(in_args: Input, decomposed_key: str, content_root: str,
         replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths,
                            decomposed_schemas)
 
-    if '$defs' in bundled:
-        old_keys = [k for k in bundled['$defs']]
-        for k in old_keys:
-            de_escaped_key = de_escape_json_ref_path(k)
-            instantiate_defs_originating_from_schema(in_args, bundled, de_escaped_key, subschemas, origins, decomposed_schemas)
-            replace_references(in_args, bundled, k, bundled['$defs'][k], content_root, reference_paths, decomposed_schemas)
+    num_of_parses = 3
+    while num_of_parses > 0:
+        if '$defs' in bundled:
+            old_keys = [k for k in bundled['$defs']]
+            for k in old_keys:
+                de_escaped_key = de_escape_json_ref_path(k)
+                instantiate_defs_originating_from_schema(in_args, bundled, de_escaped_key, subschemas, origins, decomposed_schemas)
+                replace_references(in_args, bundled, k, bundled['$defs'][k], content_root, reference_paths, decomposed_schemas)
 
-    for subschema_key, subschema_contents in subschemas:
-        replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths,
-                           decomposed_schemas)
+        for subschema_key, subschema_contents in subschemas:
+            replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths,
+                               decomposed_schemas)
+        num_of_parses -= 1
 
     output[decomposed_key] = bundled
     pass
