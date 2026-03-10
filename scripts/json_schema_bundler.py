@@ -162,7 +162,7 @@ def extract_references_single(in_args: Input, current_node: Any, schema_key_in_d
     if isinstance(current_node, dict):
         for k, v in current_node.items():
             if k == '$ref':
-                if v.startswith('#'):
+                if v.startswith('#') and len(v) > 1:
                     if in_args.verbose:
                         print(f"---- Skipping reference to subschema in current object '{schema_key_in_decomposed_objects}' at '{current_path}'")
                     continue
@@ -407,6 +407,10 @@ def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_sche
             # If this uses a '$ref' to a local object, just ignore it, as it will be copied when acquiring the root
             # object (if '$ref' is originating from another object, it's because it was copied here as well, so
             # its defs will exist).
+            if referencing_object['$ref'] == '#' and bundled is not this_schema:
+                # Except self-reference, in that case, we want to reference the added sub-schema.
+                referencing_object['$ref'] = f'#/$defs/{key_of_this_schema}'
+
             continue
 
         key_of_referenced_object = get_decomposed_key_at_content(content_root, referencing_object['$ref'])
