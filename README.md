@@ -2,6 +2,13 @@
 
 This repository is used to store tool sources and binaries used in [squiby](https://github.com/SquarefaceStudios/squiby)
 
+## Contents
+
+- [Hooks](#hooks)
+  - [Clang format & pre-commit](#clang-format---pre-commit)
+- [Tools](#tools)
+  - [JSON Schema bundler](#json-schema-bundler)
+
 ## Hooks
 
 ### Clang format - pre-commit
@@ -20,3 +27,13 @@ ninja -C build clang-format
 ```
 
 Install or add build/bin into PATH or move the built binaries in another location in PATH
+
+## Tools
+
+### JSON Schema bundler
+
+Used in the https://github.com/SquarefaceStudios/meta repository to generate bundled schemas.
+
+IDEs provide lackluster support for modular JSON schemas. This script merges modular schemas into bundled ones to be used directly.
+
+How is it used to bundle schemas: https://github.com/SquarefaceStudios/meta/blob/379e9d1087d14fcd9f3f976baad73066b589715f/doc/squiby_json_schema/squiby_json_schema.md#step-by-step-breakdown---normal-changes.
