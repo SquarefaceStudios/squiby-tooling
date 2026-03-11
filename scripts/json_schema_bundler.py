@@ -383,7 +383,7 @@ def instantiate_defs_originating_from_schema(in_args: Input, bundled: dict[str, 
 
 def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_schema: str, this_schema: dict[str, Any],
                        content_root: str,
-                       reference_paths: list[tuple[str, str]], decomposed_schemas: dict[str, dict[str, Any]]) -> None:
+                       reference_paths: list[tuple[str, str]], decomposed_schemas: dict[str, dict[str, Any]], origins: dict[str, str]) -> None:
     """
     Replaces references ('$ref') in current object to external URLs with references to local object in '$defs'.
     :param in_args: script input args.
@@ -393,6 +393,7 @@ def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_sche
     :param content_root: string containing URL content root.
     :param reference_paths: list of JSON schema path -> object containing a '$ref' marker.
     :param decomposed_schemas: dict of schema key -> decomposed schema. Without meta elements or subschemas.
+    :param origins: list of subschema key -> schema key, used to re-attach '$defs' to objects.
     :return: None
     """
 
@@ -409,7 +410,11 @@ def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_sche
             # its defs will exist).
             if referencing_object['$ref'] == '#' and bundled is not this_schema:
                 # Except self-reference, in that case, we want to reference the added sub-schema.
-                referencing_object['$ref'] = f'#/$defs/{key_of_this_schema}'
+                origin_key = key_of_this_schema
+                if origin_key in origins:
+                    origin_key = origins[origin_key]
+
+                referencing_object['$ref'] = f'#/$defs/{escape_json_ref_path(origin_key)}'
 
             continue
 
@@ -515,7 +520,7 @@ def bundle_single(in_args: Input, decomposed_key: str, content_root: str,
 
     # Create defs for this schema, and replace refs found in current object.
     instantiate_defs_originating_from_schema(in_args, bundled, decomposed_key, subschemas, origins, decomposed_schemas)
-    replace_references(in_args, bundled, decomposed_key, bundled, content_root, reference_paths, decomposed_schemas)
+    replace_references(in_args, bundled, decomposed_key, bundled, content_root, reference_paths, decomposed_schemas, origins)
 
     # And do this a bunch of times. More references could have been inserted by the new subschemas.
     for subschema_key, subschema_contents in subschemas:
@@ -532,11 +537,11 @@ def bundle_single(in_args: Input, decomposed_key: str, content_root: str,
                 instantiate_defs_originating_from_schema(in_args, bundled, de_escaped_key, subschemas, origins,
                                                          decomposed_schemas)
                 replace_references(in_args, bundled, k, bundled['$defs'][k], content_root, reference_paths,
-                                   decomposed_schemas)
+                                   decomposed_schemas, origins)
 
         for subschema_key, subschema_contents in subschemas:
             replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths,
-                               decomposed_schemas)
+                               decomposed_schemas, origins)
         num_of_parses -= 1
 
     output[decomposed_key] = bundled
