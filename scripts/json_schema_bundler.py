@@ -450,16 +450,9 @@ def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_sche
                 print(f"-- Skipping duplicate of definition for '{key_of_referenced_object}'")
             continue
 
-        # By default, copy whole referred-to object.
+        # By default, copy whole referred-to object. If we have any references to sub-objects, these are resolved
+        # when sub-objects are instantiated.
         referenced_object = decomposed_schemas[key_of_referenced_object]
-        if path_in_referenced_object and path_in_referenced_object.startswith('/$defs/'):
-            # If URL#/$defs/subpath, then we copy the subobject only.
-            path_in_referenced_object = path_in_referenced_object.removeprefix('/$defs/')
-            remaining_segments = path_in_referenced_object.split('/', maxsplit=1)
-
-            referenced_object = get_object_at_json_pointer(decomposed_schemas[remaining_segments[0]],
-                                                           json_pointer_from_path(remaining_segments[1] if len(
-                                                            remaining_segments) > 1 else ''))
 
         # Do a full copy of the subschema, place it in '$defs'.
         copied_subobject = deepcopy(referenced_object)
@@ -468,14 +461,7 @@ def replace_references(in_args: Input, bundled: dict[str, Any], key_of_this_sche
         if 'version' in copied_subobject:
             del copied_subobject['version']
 
-        if not path_in_referenced_object:
-            bundled['$defs'][escape_json_ref_path(key_of_referenced_object)] = copied_subobject
-        else:
-            # Take the last item in the path ($defs/item <-- only this)
-            # Yes, it is assuming that there are only two items in the path, but this is the most encountered
-            # case. Usually we refer to only subschemas (URL#/$defs/here).
-            # If we need objects in subschemas (URL#/$defs/not_here/but_here), this should be changed.
-            bundled['$defs'][escape_json_ref_path(path_in_referenced_object.split('/')[-1])] = copied_subobject
+        bundled['$defs'][escape_json_ref_path(key_of_referenced_object)] = copied_subobject
 
         if in_args.verbose:
             print(f"---- Inserted '$def' for '{key_of_referenced_object}'")
@@ -525,7 +511,7 @@ def bundle_single(in_args: Input, decomposed_key: str, content_root: str,
     # And do this a bunch of times. More references could have been inserted by the new subschemas.
     for subschema_key, subschema_contents in subschemas:
         replace_references(in_args, bundled, subschema_key, subschema_contents, content_root, reference_paths,
-                           decomposed_schemas)
+                           decomposed_schemas, origins)
 
     # And try to instantiate + resolve a couple of times again, only for objects inside '$defs'
     num_of_parses = 3
